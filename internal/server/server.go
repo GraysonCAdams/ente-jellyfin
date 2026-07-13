@@ -15,6 +15,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -360,17 +361,17 @@ func (s *Server) segmentURL(id int64) (string, error) {
 	return url, nil
 }
 
-// handleStream serves /stream/{id}.ts — the decrypted 720p preview as one
-// progressive, seekable MPEG-TS. Native players (Infuse/Swiftfin/AVPlayer)
-// direct-play this because it's a plain container, not an HLS playlist.
+// handleStream serves /stream/{id}.mp4 — the decrypted 720p preview remuxed to
+// MP4. MP4 is the one container every client direct-plays: AVPlayer (Swiftfin/
+// tvOS), Infuse/Streamyfin (VLC engines), Tizen, and browsers.
 func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
-	path := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/stream/"), ".ts")
+	path := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/stream/"), ".mp4")
 	id, err := strconv.ParseInt(path, 10, 64)
 	if err != nil {
 		http.Error(w, "bad file id", http.StatusBadRequest)
 		return
 	}
-	cachePath := filepath.Join(s.cacheDir, fmt.Sprintf("prev-%d.ts", id))
+	cachePath := filepath.Join(s.cacheDir, fmt.Sprintf("prev-%d.mp4", id))
 	lk := s.fileLock(id)
 	lk.Lock()
 	if fi, statErr := os.Stat(cachePath); statErr != nil || fi.Size() == 0 {
@@ -392,12 +393,12 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 	}
 	defer f.Close()
 	fi, _ := f.Stat()
-	w.Header().Set("Content-Type", "video/mp2t")
-	http.ServeContent(w, r, fmt.Sprintf("%d.ts", id), fi.ModTime(), f)
+	w.Header().Set("Content-Type", "video/mp4")
+	http.ServeContent(w, r, fmt.Sprintf("%d.mp4", id), fi.ModTime(), f)
 }
 
-// buildProgressive downloads the encrypted output.ts, decrypts every segment,
-// and writes the concatenated plaintext MPEG-TS to the cache.
+// buildProgressive downloads the encrypted output.ts, decrypts every segment to
+// a temp MPEG-TS, then remuxes (stream copy, no re-encode) to a faststart MP4.
 func (s *Server) buildProgressive(id int64, cachePath string) error {
 	info, err := s.hlsInfoFor(id)
 	if err != nil {
@@ -417,24 +418,40 @@ func (s *Server) buildProgressive(id int64, cachePath string) error {
 	if err != nil {
 		return err
 	}
-	out, err := os.Create(cachePath)
+
+	tmpTS := cachePath + ".ts"
+	out, err := os.Create(tmpTS)
 	if err != nil {
 		return err
 	}
-	defer out.Close()
 	for _, seg := range info.segs {
 		if seg.offset+seg.length > int64(len(whole)) {
-			os.Remove(cachePath)
+			out.Close()
+			os.Remove(tmpTS)
 			return fmt.Errorf("segment range beyond blob")
 		}
 		plain, derr := aesCBCUnpad(whole[seg.offset:seg.offset+seg.length], info.key, info.iv)
 		if derr != nil {
-			os.Remove(cachePath)
+			out.Close()
+			os.Remove(tmpTS)
 			return derr
 		}
 		if _, werr := out.Write(plain); werr != nil {
+			out.Close()
+			os.Remove(tmpTS)
 			return werr
 		}
+	}
+	out.Close()
+	defer os.Remove(tmpTS)
+
+	// Remux TS -> MP4 without re-encoding (fast). +faststart makes it seekable.
+	cmd := exec.Command("ffmpeg", "-y", "-loglevel", "error",
+		"-fflags", "+genpts", "-i", tmpTS,
+		"-c", "copy", "-movflags", "+faststart", cachePath)
+	if outErr, e := cmd.CombinedOutput(); e != nil {
+		os.Remove(cachePath)
+		return fmt.Errorf("remux: %v: %s", e, strings.TrimSpace(string(outErr)))
 	}
 	s.evictCache()
 	return nil

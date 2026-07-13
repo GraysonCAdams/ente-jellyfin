@@ -13,6 +13,7 @@ services:
     volumes:
       - gateway-cache:/cache
       - library:/library
+      - movies:/movies
 
   jellyfin:
     image: jellyfin/jellyfin:latest
@@ -21,6 +22,7 @@ services:
       - jf-config:/config
       - jf-cache:/cache
       - library:/media:ro
+      - movies:/movies:ro
     depends_on: [ gateway ]
 
   cloudflared:
@@ -36,3 +38,4 @@ volumes:
   jf-config:
   jf-cache:
   library:
+  movies:

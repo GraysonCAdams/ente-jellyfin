@@ -72,6 +72,11 @@ func main() {
 			fmt.Fprintln(os.Stderr, "error:", err)
 			os.Exit(1)
 		}
+	case "movies":
+		if err := runMovies(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			os.Exit(1)
+		}
 	case "export-secrets":
 		sess, err := session.Load()
 		if err != nil {
@@ -280,7 +285,7 @@ func runStrm(args []string) error {
 				var url string
 				mu.Lock()
 				if hasPreview {
-					url = fmt.Sprintf("%s/stream/%d.ts%s", base, item.ID, tokenQ)
+					url = fmt.Sprintf("%s/stream/%d.mp4%s", base, item.ID, tokenQ)
 					hlsCount++
 				} else {
 					ext := filepath.Ext(item.Title)
@@ -495,7 +500,7 @@ func runFlat(args []string) error {
 				_, hasPreview, _ := client.FetchVidPreviewPlaylist(item.ID)
 				var url string
 				if hasPreview {
-					url = fmt.Sprintf("%s/stream/%d.ts%s", base, item.ID, tokenQ)
+					url = fmt.Sprintf("%s/stream/%d.mp4%s", base, item.ID, tokenQ)
 				} else {
 					ext := filepath.Ext(item.Title)
 					if ext == "" {

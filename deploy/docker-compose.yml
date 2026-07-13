@@ -14,6 +14,8 @@ services:
       - gateway-cache:/cache
       - library:/library
       - movies:/movies
+      - subtitles:/subtitles
+      - summaries:/summaries
 
   jellyfin:
     image: jellyfin/jellyfin:latest
@@ -39,3 +41,5 @@ volumes:
   jf-cache:
   library:
   movies:
+  subtitles:
+  summaries:

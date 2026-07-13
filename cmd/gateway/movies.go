@@ -208,7 +208,7 @@ func runMovies(args []string) error {
 			if jpg, err := client.ThumbnailJPEG(t.item); err == nil {
 				os.WriteFile(filepath.Join(dir, "poster.jpg"), jpg, 0o644)
 			}
-			nfo := buildMovieNFO(t.label, t.item.Created, t.year)
+			nfo := buildMovieNFO(t.label, t.item.Created, t.year, readSummary(t.item.ID))
 			os.WriteFile(filepath.Join(dir, folder+".nfo"), []byte(nfo), 0o644)
 			mu.Lock()
 			written++
@@ -220,7 +220,22 @@ func runMovies(args []string) error {
 	return nil
 }
 
-func buildMovieNFO(title string, created time.Time, year int) string {
+// readSummary returns the AI-generated plot summary for a file id, or "" if
+// none exists. Summaries live in their own id-keyed store (like subtitles) so
+// they survive every `gateway movies` regeneration.
+func readSummary(id int64) string {
+	dir := os.Getenv("GATEWAY_SUMS")
+	if dir == "" {
+		dir = "/summaries"
+	}
+	b, err := os.ReadFile(filepath.Join(dir, strconv.FormatInt(id, 10)+".txt"))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
+}
+
+func buildMovieNFO(title string, created time.Time, year int, plot string) string {
 	esc := func(s string) string {
 		s = strings.ReplaceAll(s, "&", "&amp;")
 		s = strings.ReplaceAll(s, "<", "&lt;")
@@ -230,12 +245,16 @@ func buildMovieNFO(title string, created time.Time, year int) string {
 	if year > 0 {
 		premiered = created.Format("2006-01-02")
 	}
+	plotXML := ""
+	if plot != "" {
+		plotXML = fmt.Sprintf("\n  <plot>%s</plot>", esc(plot))
+	}
 	return fmt.Sprintf(`<?xml version="1.0" encoding="utf-8"?>
 <movie>
   <title>%s</title>
   <sorttitle>%s</sorttitle>
   <premiered>%s</premiered>
-  <year>%d</year>
+  <year>%d</year>%s
 </movie>
-`, esc(title), premiered, premiered, year)
+`, esc(title), premiered, premiered, year, plotXML)
 }

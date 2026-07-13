@@ -6,6 +6,7 @@
 package server
 
 import (
+	"bufio"
 	"crypto/aes"
 	"crypto/cipher"
 	"encoding/base64"
@@ -414,42 +415,74 @@ func (s *Server) buildProgressive(id int64, cachePath string) error {
 		return err
 	}
 	defer resp.Body.Close()
-	whole, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return err
-	}
-
 	tmpTS := cachePath + ".ts"
 	out, err := os.Create(tmpTS)
 	if err != nil {
 		return err
 	}
+	// Stream the preview blob once, decrypting each segment in playlist order,
+	// so peak memory stays at ~one segment. Previously io.ReadAll buffered the
+	// whole blob (>1GB for a long tape), which OOM-killed the box mid-build.
+	// Ente's vid_preview is a single .ts whose segments are sequential byte
+	// ranges, so playlist order is already ascending by offset; we assert that
+	// (a non-monotonic offset would need random access) rather than scramble.
+	fail := func(e error) error {
+		out.Close()
+		os.Remove(tmpTS)
+		return e
+	}
+	br := bufio.NewReaderSize(resp.Body, 1<<20)
+	var pos int64
+	var buf []byte
 	for _, seg := range info.segs {
-		if seg.offset+seg.length > int64(len(whole)) {
-			out.Close()
-			os.Remove(tmpTS)
-			return fmt.Errorf("segment range beyond blob")
+		if seg.offset < pos {
+			return fail(fmt.Errorf("non-monotonic segment offset %d < %d", seg.offset, pos))
 		}
-		plain, derr := aesCBCUnpad(whole[seg.offset:seg.offset+seg.length], info.key, info.iv)
+		if gap := seg.offset - pos; gap > 0 {
+			if _, e := io.CopyN(io.Discard, br, gap); e != nil {
+				return fail(e)
+			}
+			pos = seg.offset
+		}
+		if int64(cap(buf)) < seg.length {
+			buf = make([]byte, seg.length)
+		}
+		chunk := buf[:seg.length]
+		if _, e := io.ReadFull(br, chunk); e != nil {
+			return fail(e)
+		}
+		pos += seg.length
+		plain, derr := aesCBCUnpad(chunk, info.key, info.iv)
 		if derr != nil {
-			out.Close()
-			os.Remove(tmpTS)
-			return derr
+			return fail(derr)
 		}
 		if _, werr := out.Write(plain); werr != nil {
-			out.Close()
-			os.Remove(tmpTS)
-			return werr
+			return fail(werr)
 		}
 	}
 	out.Close()
 	defer os.Remove(tmpTS)
 
 	// Remux TS -> MP4 without re-encoding (fast). +faststart makes it seekable.
-	cmd := exec.Command("ffmpeg", "-y", "-loglevel", "error",
-		"-fflags", "+genpts", "-i", tmpTS,
-		"-c", "copy", "-movflags", "+faststart", cachePath)
-	if outErr, e := cmd.CombinedOutput(); e != nil {
+	// If a subtitle exists for this file, embed it as a soft mov_text track so
+	// every client sees captions (external subs aren't reliable for .strm).
+	subsDir := os.Getenv("GATEWAY_SUBS")
+	if subsDir == "" {
+		subsDir = "/subtitles"
+	}
+	subPath := filepath.Join(subsDir, strconv.FormatInt(id, 10)+".srt")
+	args := []string{"-y", "-loglevel", "error", "-fflags", "+genpts", "-i", tmpTS}
+	fi, statErr := os.Stat(subPath)
+	log.Printf("build %d: subtitle %s exists=%v", id, subPath, statErr == nil)
+	if statErr == nil && fi.Size() > 0 {
+		args = append(args, "-i", subPath,
+			"-map", "0:v:0", "-map", "0:a:0?", "-map", "1:0",
+			"-c", "copy", "-c:s", "mov_text", "-metadata:s:s:0", "language=eng",
+			"-movflags", "+faststart", cachePath)
+	} else {
+		args = append(args, "-c", "copy", "-movflags", "+faststart", cachePath)
+	}
+	if outErr, e := exec.Command("ffmpeg", args...).CombinedOutput(); e != nil {
 		os.Remove(cachePath)
 		return fmt.Errorf("remux: %v: %s", e, strings.TrimSpace(string(outErr)))
 	}

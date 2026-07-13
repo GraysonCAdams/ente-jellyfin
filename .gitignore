@@ -1,0 +1,7 @@
+/bin/
+*.log
+# secrets & host-specific config never get committed
+deploy/.env
+deploy/.env.*
+# private ops (enrichment, playlists, runbook) live in a separate private repo
+/ops/

@@ -1,0 +1,38 @@
+# Ente -> Jellyfin stack. Nothing is published to the host; Cloudflare Tunnel
+# fronts Jellyfin, so the box exposes no public ports.
+services:
+  gateway:
+    build: ..
+    image: ente-jellyfin-gateway
+    restart: unless-stopped
+    env_file: [ .env ] # ENTE_* secrets
+    environment:
+      GATEWAY_ADDR: 0.0.0.0:8092
+      GATEWAY_PUBLIC_URL: https://gateway.adams.you
+      GATEWAY_CACHE: /cache
+    volumes:
+      - gateway-cache:/cache
+      - library:/library
+
+  jellyfin:
+    image: jellyfin/jellyfin:latest
+    restart: unless-stopped
+    volumes:
+      - jf-config:/config
+      - jf-cache:/cache
+      - library:/media:ro
+    depends_on: [ gateway ]
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: tunnel run
+    environment:
+      TUNNEL_TOKEN: ${CF_TUNNEL_TOKEN}
+    depends_on: [ jellyfin ]
+
+volumes:
+  gateway-cache:
+  jf-config:
+  jf-cache:
+  library:

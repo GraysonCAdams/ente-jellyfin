@@ -210,6 +210,12 @@ func runMovies(args []string) error {
 			}
 			nfo := buildMovieNFO(t.label, t.item.Created, t.year, readSummary(t.item.ID))
 			os.WriteFile(filepath.Join(dir, folder+".nfo"), []byte(nfo), 0o644)
+			// English subtitle sidecar. Jellyfin surfaces external .srt during a
+			// plain metadata refresh (no media re-probe), unlike an embedded
+			// track, which it only sees on an item's first probe.
+			if srt := readSubtitle(t.item.ID); len(srt) > 0 {
+				os.WriteFile(filepath.Join(dir, folder+".en.srt"), srt, 0o644)
+			}
 			mu.Lock()
 			written++
 			mu.Unlock()
@@ -233,6 +239,19 @@ func readSummary(id int64) string {
 		return ""
 	}
 	return strings.TrimSpace(string(b))
+}
+
+// readSubtitle returns a video's caption sidecar bytes, or nil if none exists.
+func readSubtitle(id int64) []byte {
+	dir := os.Getenv("GATEWAY_SUBS")
+	if dir == "" {
+		dir = "/subtitles"
+	}
+	b, err := os.ReadFile(filepath.Join(dir, strconv.FormatInt(id, 10)+".srt"))
+	if err != nil {
+		return nil
+	}
+	return b
 }
 
 func buildMovieNFO(title string, created time.Time, year int, plot string) string {

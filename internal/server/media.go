@@ -132,11 +132,18 @@ func (s *Server) evictCache() {
 	if total <= s.cacheCap {
 		return
 	}
-	// Oldest first; delete until under cap.
+	// Oldest first; delete until under cap. Never evict a file modified in the
+	// last 2 minutes: it may be an in-flight decrypt another request is about to
+	// serve, and a single original larger than the cap must not delete itself
+	// immediately after creation.
+	cutoff := time.Now().Add(-2 * time.Minute)
 	sort.Slice(files, func(i, j int) bool { return files[i].mod.Before(files[j].mod) })
 	for _, f := range files {
 		if total <= s.cacheCap {
 			break
+		}
+		if f.mod.After(cutoff) {
+			continue
 		}
 		if err := os.Remove(f.path); err == nil {
 			total -= f.size

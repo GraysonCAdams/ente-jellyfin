@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"text/tabwriter"
@@ -212,7 +213,12 @@ func runServe() error {
 	if cacheDir == "" {
 		cacheDir = filepath.Join(os.Getenv("HOME"), "ente-jellyfin", "cache")
 	}
-	var cacheCap int64 = 5 << 30 // 5 GiB of decrypted originals, LRU-evicted
+	var cacheCap int64 = 20 << 30 // 20 GiB of decrypted originals, LRU-evicted
+	if v := os.Getenv("GATEWAY_CACHE_CAP_GB"); v != "" {
+		if gb, err := strconv.ParseInt(v, 10, 64); err == nil && gb > 0 {
+			cacheCap = gb << 30
+		}
+	}
 	publicURL := os.Getenv("GATEWAY_PUBLIC_URL")
 	srv := server.New(client, addr, publicURL, cacheDir, cacheCap, lib)
 	return srv.ListenAndServe()

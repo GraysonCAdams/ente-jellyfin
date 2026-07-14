@@ -378,6 +378,12 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 	if fi, statErr := os.Stat(cachePath); statErr != nil || fi.Size() == 0 {
 		if berr := s.buildProgressive(id, cachePath); berr != nil {
 			lk.Unlock()
+			// No HLS preview yet (still processing on Ente, or none exists):
+			// fall back to the decrypted original so the tape still plays.
+			if strings.Contains(berr.Error(), "no streamable preview") {
+				s.serveOriginal(w, r, id)
+				return
+			}
 			http.Error(w, "stream: "+berr.Error(), http.StatusBadGateway)
 			return
 		}

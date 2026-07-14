@@ -31,6 +31,14 @@ func (s *Server) handleMedia(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad file id", http.StatusBadRequest)
 		return
 	}
+	s.serveOriginal(w, r, id)
+}
+
+// serveOriginal decrypts (cached) and serves a file's original blob with Range
+// support. handleStream falls back to this when a tape has no servable HLS
+// preview (Ente generates previews asynchronously, so a freshly-added tape may
+// briefly report a preview that isn't yet built).
+func (s *Server) serveOriginal(w http.ResponseWriter, r *http.Request, id int64) {
 	it, ok := s.item(id)
 	if !ok {
 		http.Error(w, "unknown file", http.StatusNotFound)

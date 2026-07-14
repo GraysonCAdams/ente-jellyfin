@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -26,13 +27,26 @@ const (
 // with the token recovered from the CLI session.
 type Client struct {
 	sess *session.Session
-	http *http.Client
+	http *http.Client // short calls: API/JSON, thumbnails
+	dl   *http.Client // large blob downloads: no total cap (files reach 1GB+)
 }
 
 func New(sess *session.Session) *Client {
 	return &Client{
 		sess: sess,
 		http: &http.Client{Timeout: 60 * time.Second},
+		// A total Client.Timeout also caps body streaming, so a 60s cap can
+		// never finish a 1GB original download. This client has no overall
+		// deadline; ResponseHeaderTimeout still guards against a dead connect
+		// hanging forever (the failure mode that once wedged the batch).
+		dl: &http.Client{
+			Transport: &http.Transport{
+				DialContext:           (&net.Dialer{Timeout: 30 * time.Second}).DialContext,
+				TLSHandshakeTimeout:   30 * time.Second,
+				ResponseHeaderTimeout: 60 * time.Second,
+				IdleConnTimeout:       90 * time.Second,
+			},
+		},
 	}
 }
 
@@ -108,7 +122,7 @@ func (c *Client) DownloadEncrypted(fileID int64) (io.ReadCloser, int64, error) {
 	}
 	req.Header.Set(tokenHeader, c.sess.Token)
 	req.Header.Set(clientPkgHeader, clientPkg)
-	resp, err := c.http.Do(req)
+	resp, err := c.dl.Do(req)
 	if err != nil {
 		return nil, 0, err
 	}

@@ -1,8 +1,11 @@
 package server
 
 import (
+	"fmt"
+	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -49,7 +52,35 @@ func (s *Server) serveOriginal(w http.ResponseWriter, r *http.Request, id int64)
 		http.Error(w, "decrypt: "+err.Error(), http.StatusBadGateway)
 		return
 	}
-	f, err := os.Open(cachePath)
+	// Previewless tapes bypass buildProgressive, so this is the only place they
+	// can pick up captions: if a subtitle exists, serve a cached copy of the
+	// original with the sub embedded as a soft mov_text track. -c copy avoids
+	// re-decoding (also dodges tapes whose source audio ffmpeg can't decode).
+	servePath := cachePath
+	if subPath, ok := s.subtitleFor(id); ok {
+		capPath := filepath.Join(s.cacheDir, fmt.Sprintf("cap-%d.mp4", id))
+		lk := s.fileLock(id)
+		lk.Lock()
+		if fi, statErr := os.Stat(capPath); statErr != nil || fi.Size() == 0 {
+			args := []string{"-y", "-loglevel", "error", "-i", cachePath, "-i", subPath,
+				"-map", "0:v:0", "-map", "0:a:0?", "-map", "1:0",
+				"-c", "copy", "-c:s", "mov_text", "-metadata:s:s:0", "language=eng",
+				"-movflags", "+faststart", capPath}
+			if out, e := exec.Command("ffmpeg", args...).CombinedOutput(); e != nil {
+				os.Remove(capPath)
+				log.Printf("caption remux %d failed, serving uncaptioned: %v: %s",
+					id, e, strings.TrimSpace(string(out)))
+			}
+		}
+		lk.Unlock()
+		if fi, statErr := os.Stat(capPath); statErr == nil && fi.Size() > 0 {
+			servePath = capPath
+			now := time.Now()
+			_ = os.Chtimes(capPath, now, now)
+			s.evictCache()
+		}
+	}
+	f, err := os.Open(servePath)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

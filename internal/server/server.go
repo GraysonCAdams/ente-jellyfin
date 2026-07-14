@@ -472,15 +472,8 @@ func (s *Server) buildProgressive(id int64, cachePath string) error {
 	// Remux TS -> MP4 without re-encoding (fast). +faststart makes it seekable.
 	// If a subtitle exists for this file, embed it as a soft mov_text track so
 	// every client sees captions (external subs aren't reliable for .strm).
-	subsDir := os.Getenv("GATEWAY_SUBS")
-	if subsDir == "" {
-		subsDir = "/subtitles"
-	}
-	subPath := filepath.Join(subsDir, strconv.FormatInt(id, 10)+".srt")
 	args := []string{"-y", "-loglevel", "error", "-fflags", "+genpts", "-i", tmpTS}
-	fi, statErr := os.Stat(subPath)
-	log.Printf("build %d: subtitle %s exists=%v", id, subPath, statErr == nil)
-	if statErr == nil && fi.Size() > 0 {
+	if subPath, ok := s.subtitleFor(id); ok {
 		args = append(args, "-i", subPath,
 			"-map", "0:v:0", "-map", "0:a:0?", "-map", "1:0",
 			"-c", "copy", "-c:s", "mov_text", "-metadata:s:s:0", "language=eng",
@@ -494,6 +487,21 @@ func (s *Server) buildProgressive(id int64, cachePath string) error {
 	}
 	s.evictCache()
 	return nil
+}
+
+// subtitleFor returns the path to a video's caption sidecar if one exists and
+// is non-empty. Subtitles live in an id-keyed store written by the enrichment
+// pass (/subtitles/{id}.srt), separate from Ente so they survive regeneration.
+func (s *Server) subtitleFor(id int64) (string, bool) {
+	dir := os.Getenv("GATEWAY_SUBS")
+	if dir == "" {
+		dir = "/subtitles"
+	}
+	p := filepath.Join(dir, strconv.FormatInt(id, 10)+".srt")
+	if fi, err := os.Stat(p); err == nil && fi.Size() > 0 {
+		return p, true
+	}
+	return "", false
 }
 
 func logging(next http.Handler) http.Handler {
